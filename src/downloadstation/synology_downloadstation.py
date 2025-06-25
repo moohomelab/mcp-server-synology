@@ -428,3 +428,36 @@ class SynologyDownloadStation:
             print("⚠️  'downloads' folder does not exist. Please create it in File Station.", file=sys.stderr)
             print("   Typical path: Control Panel > Shared Folder > Create > Name: 'downloads'", file=sys.stderr)
             return False
+
+    def list_downloaded_files(self, destination: Optional[str] = None) -> Dict[str, Any]:
+        
+        if not destination:
+            destination = self.get_default_destination()
+        
+        
+        print(f"🔍 Listing downloaded files in: {destination}", file=sys.stderr)
+        
+        try:
+            
+            request_params = {
+                'api': 'SYNO.FileStation.List',
+                'version': '2',
+                'method': 'list',
+                'folder_path': f'/{destination}',
+                '_sid': self.session_id
+            }
+            
+            response = requests.get(self.api_url, params=request_params, verify=False)
+            response.raise_for_status()
+            data = response.json()
+            
+            
+            if data.get('success'):
+                return data.get('data', {})
+            else:
+                error_code = data.get('error', {}).get('code', 'unknown')
+                error_msg = self._get_error_message(error_code)
+                raise Exception(f"FileStation API error {error_code}: {error_msg}")
+                
+        except Exception as e:
+            raise Exception(f"Could not list downloaded files: {e}")

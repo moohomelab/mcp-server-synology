@@ -172,6 +172,8 @@ class SynologyMCPServer:
                     return await self._handle_get_file_info(arguments)
                 elif name == "search_files":
                     return await self._handle_search_files(arguments)
+                elif name == "get_file_content":
+                    return await self._handle_get_file_content(arguments)
                 elif name == "rename_file":
                     return await self._handle_rename_file(arguments)
                 elif name == "move_file":
@@ -197,6 +199,8 @@ class SynologyMCPServer:
                     return await self._handle_ds_delete_tasks(arguments)
                 elif name == "ds_get_statistics":
                     return await self._handle_ds_get_statistics(arguments)
+                elif name == "ds_list_downloaded_files":
+                    return await self._handle_ds_list_downloaded_files(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
             except Exception as e:
@@ -398,6 +402,19 @@ class SynologyMCPServer:
             type="text",
             text=json.dumps(results, indent=2)
         )]
+
+    async def _handle_get_file_content(self, arguments: dict) -> list[types.TextContent]:
+        """Handle getting file content."""
+        base_url = self._get_base_url(arguments)
+        path = arguments["path"]
+        
+        filestation = self._get_filestation(base_url)
+        content = filestation.get_file_content(path)
+        
+        return [types.TextContent(
+            type="text",
+            text=content
+        )]
     
     async def _handle_rename_file(self, arguments: dict) -> list[types.TextContent]:
         """Handle renaming a file or directory."""
@@ -562,6 +579,19 @@ class SynologyMCPServer:
             type="text",
             text=json.dumps(statistics, indent=2)
         )]
+
+    async def _handle_ds_list_downloaded_files(self, arguments: dict) -> list[types.TextContent]:
+        """Handle listing files in the download destination."""
+        base_url = self._get_base_url(arguments)
+        destination = arguments.get("destination")
+        downloadstation = self._get_downloadstation(base_url)
+        
+        files = downloadstation.list_downloaded_files(destination)
+        
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(files, indent=2)
+        )]
     
     def _get_tool_definitions(self):
         """Get tool definitions shared between MCP handler and bridge."""
@@ -645,6 +675,24 @@ class SynologyMCPServer:
                         }
                     },
                     "required": ["path", "pattern"]
+                }
+            ),
+            types.Tool(
+                name="get_file_content",
+                description="Get the content of a file",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base_url": {
+                            "type": "string",
+                            "description": "Synology NAS base URL (optional if configured in .env)"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "File path (must start with /)"
+                        }
+                    },
+                    "required": ["path"]
                 }
             ),
             types.Tool(
@@ -906,6 +954,24 @@ class SynologyMCPServer:
                     },
                     "required": []
                 }
+            ),
+            types.Tool(
+                name="ds_list_downloaded_files",
+                description="List files in the Download Station destination folder",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base_url": {
+                            "type": "string",
+                            "description": "Synology NAS base URL (optional if configured in .env)"
+                        },
+                        "destination": {
+                            "type": "string",
+                            "description": "Destination folder to list (optional, defaults to download station's default)"
+                        }
+                    },
+                    "required": []
+                }
             )
         ]
 
@@ -932,6 +998,8 @@ class SynologyMCPServer:
                 return await self._handle_get_file_info(arguments)
             elif name == "search_files":
                 return await self._handle_search_files(arguments)
+            elif name == "get_file_content":
+                return await self._handle_get_file_content(arguments)
             elif name == "rename_file":
                 return await self._handle_rename_file(arguments)
             elif name == "move_file":
@@ -957,6 +1025,8 @@ class SynologyMCPServer:
                 return await self._handle_ds_delete_tasks(arguments)
             elif name == "ds_get_statistics":
                 return await self._handle_ds_get_statistics(arguments)
+            elif name == "ds_list_downloaded_files":
+                return await self._handle_ds_list_downloaded_files(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
         except Exception as e:
