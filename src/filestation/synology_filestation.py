@@ -221,23 +221,20 @@ class SynologyFileStation:
             # NOTE: DSM 7 deprecated the 'status' method (error 103), so we poll 'list' instead
             # The 'list' response includes both 'finished' flag and file results
             import time
+            result_data = None
             while True:
-                poll_data = self._make_request(
+                result_data = self._make_request(
                     'SYNO.FileStation.Search', '2', 'list',
                     taskid=task_id
                 )
 
-                if poll_data.get('finished'):
+                if result_data.get('finished'):
                     break
 
                 time.sleep(0.5)
 
-            # Get final results (may differ from last poll due to timing)
-            result_data = self._make_request(
-                'SYNO.FileStation.Search', '2', 'list',
-                taskid=task_id
-            )
-
+            # Use result_data from the poll that returned finished=true
+            # (No second request needed - eliminates race condition where task expires between calls)
             files = result_data.get('files', [])
             return [{
                 'name': file_info.get('name'),
