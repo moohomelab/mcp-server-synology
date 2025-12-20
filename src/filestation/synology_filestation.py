@@ -30,12 +30,13 @@ class SynologyFileStation:
         if use_post:
             # For POST requests, ensure UTF-8 encoding for Unicode characters
             response = requests.post(
-                self.api_url, 
+                self.api_url,
                 data=request_params,
-                headers={'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'}
+                headers={'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8'},
+                verify=False  # Support self-signed certs and internal hostnames
             )
         else:
-            response = requests.get(self.api_url, params=request_params)
+            response = requests.get(self.api_url, params=request_params, verify=False)
         response.raise_for_status()
         
         data = response.json()
@@ -70,7 +71,7 @@ class SynologyFileStation:
             **params
         }
         
-        response = requests.post(self.api_url, params=request_params, files=files)
+        response = requests.post(self.api_url, params=request_params, files=files, verify=False)
         response.raise_for_status()
         
         data = response.json()
@@ -217,24 +218,20 @@ class SynologyFileStation:
         
         try:
             # Wait for search to complete
+            # NOTE: DSM 7 deprecated the 'status' method (error 103), so we poll 'list' instead
+            # The 'list' response includes both 'finished' flag and file results
             import time
             while True:
-                status_data = self._make_request(
-                    'SYNO.FileStation.Search', '2', 'status',
+                result_data = self._make_request(
+                    'SYNO.FileStation.Search', '2', 'list',
                     taskid=task_id
                 )
-                
-                if status_data.get('finished'):
+
+                if result_data.get('finished'):
                     break
-                
+
                 time.sleep(0.5)
-            
-            # Get results
-            result_data = self._make_request(
-                'SYNO.FileStation.Search', '2', 'list',
-                taskid=task_id
-            )
-            
+
             files = result_data.get('files', [])
             return [{
                 'name': file_info.get('name'),
@@ -353,7 +350,7 @@ class SynologyFileStation:
                 }
                 
                 # Make the request
-                response = session.post(url, files=files, data=data)
+                response = session.post(url, files=files, data=data, verify=False)
                 response.raise_for_status()
                 
                 result = response.json()
