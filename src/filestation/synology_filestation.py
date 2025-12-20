@@ -222,15 +222,21 @@ class SynologyFileStation:
             # The 'list' response includes both 'finished' flag and file results
             import time
             while True:
-                result_data = self._make_request(
+                poll_data = self._make_request(
                     'SYNO.FileStation.Search', '2', 'list',
                     taskid=task_id
                 )
 
-                if result_data.get('finished'):
+                if poll_data.get('finished'):
                     break
 
                 time.sleep(0.5)
+
+            # Get final results (may differ from last poll due to timing)
+            result_data = self._make_request(
+                'SYNO.FileStation.Search', '2', 'list',
+                taskid=task_id
+            )
 
             files = result_data.get('files', [])
             return [{
