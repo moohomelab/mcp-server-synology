@@ -17,6 +17,7 @@ from config import config
 from auth import SynologyAuth
 from filestation import SynologyFileStation
 from downloadstation import SynologyDownloadStation
+from iscsi import SynologyISCSI
 
 
 class SynologyMCPServer:
@@ -28,6 +29,7 @@ class SynologyMCPServer:
         self.sessions: Dict[str, str] = {}  # base_url -> session_id
         self.filestation_instances: Dict[str, SynologyFileStation] = {}
         self.downloadstation_instances: Dict[str, SynologyDownloadStation] = {}
+        self.iscsi_instances: Dict[str, SynologyISCSI] = {}
         self._setup_handlers()
     
     def _get_filestation(self, base_url: str) -> SynologyFileStation:
@@ -45,13 +47,24 @@ class SynologyMCPServer:
         """Get or create DownloadStation instance for a base URL."""
         if base_url not in self.sessions:
             raise Exception(f"No active session for {base_url}. Please login first.")
-        
+
         if base_url not in self.downloadstation_instances:
             session_id = self.sessions[base_url]
             self.downloadstation_instances[base_url] = SynologyDownloadStation(base_url, session_id)
-        
+
         return self.downloadstation_instances[base_url]
-    
+
+    def _get_iscsi(self, base_url: str) -> SynologyISCSI:
+        """Get or create iSCSI instance for a base URL."""
+        if base_url not in self.sessions:
+            raise Exception(f"No active session for {base_url}. Please login first.")
+
+        if base_url not in self.iscsi_instances:
+            session_id = self.sessions[base_url]
+            self.iscsi_instances[base_url] = SynologyISCSI(base_url, session_id)
+
+        return self.iscsi_instances[base_url]
+
     async def _auto_login_if_configured(self):
         """Automatically login if credentials are configured and auto_login is enabled."""
         # Debug output to see what config values we have
@@ -78,11 +91,13 @@ class SynologyMCPServer:
                     self.sessions[base_url] = session_id
                     print(f"✅ Auto-login successful for {base_url} (Session: {session_id[:8]}...)", file=sys.stderr)
                     
-                    # Clear any existing FileStation/DownloadStation instances to force recreation with new session
+                    # Clear any existing service instances to force recreation with new session
                     if base_url in self.filestation_instances:
                         del self.filestation_instances[base_url]
                     if base_url in self.downloadstation_instances:
                         del self.downloadstation_instances[base_url]
+                    if base_url in self.iscsi_instances:
+                        del self.iscsi_instances[base_url]
                 else:
                     error_msg = f"Auto-login failed for {base_url}: {result}"
                     print(f"❌ {error_msg}", file=sys.stderr)
@@ -201,6 +216,17 @@ class SynologyMCPServer:
                     return await self._handle_ds_get_statistics(arguments)
                 elif name == "ds_list_downloaded_files":
                     return await self._handle_ds_list_downloaded_files(arguments)
+                # iSCSI/SAN Manager handlers
+                elif name == "iscsi_list_luns":
+                    return await self._handle_iscsi_list_luns(arguments)
+                elif name == "iscsi_get_lun":
+                    return await self._handle_iscsi_get_lun(arguments)
+                elif name == "iscsi_delete_lun":
+                    return await self._handle_iscsi_delete_lun(arguments)
+                elif name == "iscsi_list_targets":
+                    return await self._handle_iscsi_list_targets(arguments)
+                elif name == "iscsi_unmap_lun":
+                    return await self._handle_iscsi_unmap_lun(arguments)
                 else:
                     raise ValueError(f"Unknown tool: {name}")
             except Exception as e:
@@ -238,13 +264,15 @@ class SynologyMCPServer:
         if result.get("success"):
             session_id = result["data"]["sid"]
             self.sessions[base_url] = session_id
-            
-            # Clear any existing FileStation/DownloadStation instances to force recreation with new session
+
+            # Clear any existing service instances to force recreation with new session
             if base_url in self.filestation_instances:
                 del self.filestation_instances[base_url]
             if base_url in self.downloadstation_instances:
                 del self.downloadstation_instances[base_url]
-            
+            if base_url in self.iscsi_instances:
+                del self.iscsi_instances[base_url]
+
             return [types.TextContent(
                 type="text",
                 text=f"Successfully authenticated with {base_url}\n"
@@ -275,13 +303,15 @@ class SynologyMCPServer:
         
         # Handle the result and provide detailed feedback
         if result.get('success'):
-            # Remove session and FileStation/DownloadStation instances on successful logout
+            # Remove session and service instances on successful logout
             del self.sessions[base_url]
             if base_url in self.filestation_instances:
                 del self.filestation_instances[base_url]
             if base_url in self.downloadstation_instances:
                 del self.downloadstation_instances[base_url]
-            
+            if base_url in self.iscsi_instances:
+                del self.iscsi_instances[base_url]
+
             return [types.TextContent(
                 type="text",
                 text=f"✅ Successfully logged out from {base_url}\n"
@@ -291,7 +321,7 @@ class SynologyMCPServer:
             error_info = result.get('error', {})
             error_code = error_info.get('code', 'unknown')
             error_msg = error_info.get('message', 'Unknown error')
-            
+
             # Handle expected session expiration gracefully
             if error_code in ['105', '106', 'no_session']:
                 # Still clean up local session data
@@ -300,6 +330,8 @@ class SynologyMCPServer:
                     del self.filestation_instances[base_url]
                 if base_url in self.downloadstation_instances:
                     del self.downloadstation_instances[base_url]
+                if base_url in self.iscsi_instances:
+                    del self.iscsi_instances[base_url]
                 
                 return [types.TextContent(
                     type="text",
@@ -592,7 +624,73 @@ class SynologyMCPServer:
             type="text",
             text=json.dumps(files, indent=2)
         )]
-    
+
+    # ============ iSCSI/SAN Manager Handlers ============
+
+    async def _handle_iscsi_list_luns(self, arguments: dict) -> list[types.TextContent]:
+        """Handle listing all iSCSI LUNs."""
+        base_url = self._get_base_url(arguments)
+        iscsi = self._get_iscsi(base_url)
+
+        luns = iscsi.list_luns()
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(luns, indent=2)
+        )]
+
+    async def _handle_iscsi_get_lun(self, arguments: dict) -> list[types.TextContent]:
+        """Handle getting details of a specific iSCSI LUN."""
+        base_url = self._get_base_url(arguments)
+        uuid = arguments["uuid"]
+        iscsi = self._get_iscsi(base_url)
+
+        lun = iscsi.get_lun(uuid)
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(lun, indent=2)
+        )]
+
+    async def _handle_iscsi_delete_lun(self, arguments: dict) -> list[types.TextContent]:
+        """Handle deleting an iSCSI LUN."""
+        base_url = self._get_base_url(arguments)
+        uuid = arguments["uuid"]
+        iscsi = self._get_iscsi(base_url)
+
+        result = iscsi.delete_lun(uuid)
+
+        return [types.TextContent(
+            type="text",
+            text=f"✅ LUN deleted successfully\n{json.dumps(result, indent=2)}"
+        )]
+
+    async def _handle_iscsi_list_targets(self, arguments: dict) -> list[types.TextContent]:
+        """Handle listing all iSCSI targets."""
+        base_url = self._get_base_url(arguments)
+        iscsi = self._get_iscsi(base_url)
+
+        targets = iscsi.list_targets()
+
+        return [types.TextContent(
+            type="text",
+            text=json.dumps(targets, indent=2)
+        )]
+
+    async def _handle_iscsi_unmap_lun(self, arguments: dict) -> list[types.TextContent]:
+        """Handle unmapping a LUN from an iSCSI target."""
+        base_url = self._get_base_url(arguments)
+        lun_uuid = arguments["lun_uuid"]
+        target_id = arguments["target_id"]
+        iscsi = self._get_iscsi(base_url)
+
+        result = iscsi.unmap_lun(lun_uuid, target_id)
+
+        return [types.TextContent(
+            type="text",
+            text=f"✅ LUN unmapped successfully\n{json.dumps(result, indent=2)}"
+        )]
+
     def _get_tool_definitions(self):
         """Get tool definitions shared between MCP handler and bridge."""
         return [
@@ -972,6 +1070,93 @@ class SynologyMCPServer:
                     },
                     "required": []
                 }
+            ),
+            # iSCSI/SAN Manager Tools
+            types.Tool(
+                name="iscsi_list_luns",
+                description="List all iSCSI LUNs on the Synology NAS. Returns UUID, name, size, status, and mapping info for each LUN.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base_url": {
+                            "type": "string",
+                            "description": "Synology NAS base URL (optional if configured in .env)"
+                        }
+                    },
+                    "required": []
+                }
+            ),
+            types.Tool(
+                name="iscsi_get_lun",
+                description="Get detailed information about a specific iSCSI LUN by UUID",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base_url": {
+                            "type": "string",
+                            "description": "Synology NAS base URL (optional if configured in .env)"
+                        },
+                        "uuid": {
+                            "type": "string",
+                            "description": "UUID of the LUN to retrieve (e.g., 'pvc-8f31d340-cd9d-4b38-885a-2b1f58bc6281')"
+                        }
+                    },
+                    "required": ["uuid"]
+                }
+            ),
+            types.Tool(
+                name="iscsi_delete_lun",
+                description="Delete an iSCSI LUN by UUID. WARNING: This permanently deletes the LUN and all data on it. The LUN must be unmapped from all targets first.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base_url": {
+                            "type": "string",
+                            "description": "Synology NAS base URL (optional if configured in .env)"
+                        },
+                        "uuid": {
+                            "type": "string",
+                            "description": "UUID of the LUN to delete (e.g., 'pvc-8f31d340-cd9d-4b38-885a-2b1f58bc6281')"
+                        }
+                    },
+                    "required": ["uuid"]
+                }
+            ),
+            types.Tool(
+                name="iscsi_list_targets",
+                description="List all iSCSI targets on the Synology NAS. Shows target IQNs, status, and mapped LUNs.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base_url": {
+                            "type": "string",
+                            "description": "Synology NAS base URL (optional if configured in .env)"
+                        }
+                    },
+                    "required": []
+                }
+            ),
+            types.Tool(
+                name="iscsi_unmap_lun",
+                description="Unmap a LUN from an iSCSI target. Required before deleting a LUN that is still mapped.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "base_url": {
+                            "type": "string",
+                            "description": "Synology NAS base URL (optional if configured in .env)"
+                        },
+                        "lun_uuid": {
+                            "type": "string",
+                            "description": "UUID of the LUN to unmap"
+                        },
+                        "target_id": {
+                            "type": "string",
+                            "description": "ID of the target to unmap from"
+                        }
+                    },
+                    "required": ["lun_uuid", "target_id"]
+                }
             )
         ]
 
@@ -1027,6 +1212,17 @@ class SynologyMCPServer:
                 return await self._handle_ds_get_statistics(arguments)
             elif name == "ds_list_downloaded_files":
                 return await self._handle_ds_list_downloaded_files(arguments)
+            # iSCSI/SAN Manager handlers
+            elif name == "iscsi_list_luns":
+                return await self._handle_iscsi_list_luns(arguments)
+            elif name == "iscsi_get_lun":
+                return await self._handle_iscsi_get_lun(arguments)
+            elif name == "iscsi_delete_lun":
+                return await self._handle_iscsi_delete_lun(arguments)
+            elif name == "iscsi_list_targets":
+                return await self._handle_iscsi_list_targets(arguments)
+            elif name == "iscsi_unmap_lun":
+                return await self._handle_iscsi_unmap_lun(arguments)
             else:
                 raise ValueError(f"Unknown tool: {name}")
         except Exception as e:
@@ -1034,7 +1230,7 @@ class SynologyMCPServer:
                 type="text",
                 text=f"Error executing {name}: {str(e)}"
             )]
-    
+
     async def run(self):
         """Run the MCP server."""
         # Validate configuration first
@@ -1120,11 +1316,13 @@ class SynologyMCPServer:
                     del self.filestation_instances[base_url]
                 if base_url in self.downloadstation_instances:
                     del self.downloadstation_instances[base_url]
-                    
+                if base_url in self.iscsi_instances:
+                    del self.iscsi_instances[base_url]
+
             except Exception as e:
                 print(f"❌ Exception during cleanup for {base_url}: {e}", file=sys.stderr)
                 cleanup_results.append(f"❌ {base_url}: Exception - {str(e)}")
-        
+
         return cleanup_results
 
 
