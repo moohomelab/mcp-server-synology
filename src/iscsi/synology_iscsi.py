@@ -16,8 +16,16 @@ class SynologyISCSI:
         self.session_id = session_id
         self.api_url = f"{self.base_url}/webapi/entry.cgi"
 
-    def _make_request(self, api: str, version: str, method: str, **params) -> Dict[str, Any]:
-        """Make a request to Synology API."""
+    def _make_request(self, api: str, version: str, method: str, use_post: bool = False, **params) -> Dict[str, Any]:
+        """Make a request to Synology API.
+
+        Args:
+            api: The Synology API name (e.g., 'SYNO.Core.ISCSI.LUN')
+            version: API version
+            method: API method to call
+            use_post: Use POST instead of GET (required for mutations like delete)
+            **params: Additional parameters to pass to the API
+        """
         request_params = {
             'api': api,
             'version': version,
@@ -26,7 +34,10 @@ class SynologyISCSI:
             **params
         }
 
-        response = requests.get(self.api_url, params=request_params, verify=False)
+        if use_post:
+            response = requests.post(self.api_url, data=request_params, verify=False)
+        else:
+            response = requests.get(self.api_url, params=request_params, verify=False)
         response.raise_for_status()
 
         data = response.json()
@@ -89,7 +100,8 @@ class SynologyISCSI:
         Returns:
             LUN details dictionary.
         """
-        data = self._make_request('SYNO.Core.ISCSI.LUN', '1', 'get', uuid=uuid)
+        # UUID must be quoted as JSON string per Synology API convention
+        data = self._make_request('SYNO.Core.ISCSI.LUN', '1', 'get', uuid=f'"{uuid}"')
         lun = data.get('lun', {})
 
         return {
@@ -115,6 +127,7 @@ class SynologyISCSI:
         Delete an iSCSI LUN.
 
         WARNING: This permanently deletes the LUN and all data on it.
+        The LUN must be unmapped from all targets first.
 
         Args:
             uuid: The UUID of the LUN to delete.
@@ -122,21 +135,13 @@ class SynologyISCSI:
         Returns:
             Result of the delete operation.
         """
-        # First check if LUN exists and is unmapped
-        try:
-            lun_info = self.get_lun(uuid)
-            if lun_info.get('is_mapped'):
-                raise Exception(
-                    f"LUN {uuid} is still mapped to targets. "
-                    f"Unmap it first before deletion."
-                )
-        except Exception as e:
-            if "iSCSI API error" in str(e):
-                raise Exception(f"LUN {uuid} not found or inaccessible: {e}")
-            raise
-
-        # Perform deletion
-        data = self._make_request('SYNO.Core.ISCSI.LUN', '1', 'delete', uuid=uuid)
+        # Use POST for mutations, UUID must be quoted as JSON string
+        # Pattern from synology-csi: https://github.com/SynologyOpenSource/synology-csi
+        data = self._make_request(
+            'SYNO.Core.ISCSI.LUN', '1', 'delete',
+            use_post=True,
+            uuid=f'"{uuid}"'
+        )
 
         return {
             'success': True,
@@ -178,9 +183,11 @@ class SynologyISCSI:
         Returns:
             Result of the unmap operation.
         """
+        # Use POST for mutations, UUID must be quoted as JSON string
         data = self._make_request(
             'SYNO.Core.ISCSI.LUN', '1', 'unmap_target',
-            uuid=lun_uuid,
+            use_post=True,
+            uuid=f'"{lun_uuid}"',
             target_id=target_id
         )
 
